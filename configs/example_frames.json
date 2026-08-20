@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "benchmark_id": "example-frames-v1",
+  "selection_method": "Illustrative manifest showing the expected shape. Replace with your own frame selections; keep real selections out of the repository if they identify a dataset or an annotator.",
+  "frames": [
+    {
+      "id": "example_wide_scene",
+      "video": "${MAL_VIDEO_ROOT}/example_clip.mp4",
+      "frame_index": 300,
+      "time_seconds": 10.0,
+      "visual_note": "Wide scene with several spatially separated organisms at varied scales."
+    },
+    {
+      "id": "example_dense_scene",
+      "video": "${MAL_VIDEO_ROOT}/example_clip.mp4",
+      "frame_index": 150,
+      "time_seconds": 5.0,
+      "visual_note": "Dense, crowded scene where organisms overlap and interlace."
+    }
+  ]
+}

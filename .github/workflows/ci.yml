@@ -1,0 +1,20 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          # Pinned to the GPU box's interpreter (3.10.12). The pure-python
+          # stages must pass here; gpu/api marked tests are skipped.
+          python-version: "3.10"
+      - run: pip install -e '.[dev]'
+      - run: ruff check src tests
+      - run: pytest -q

@@ -1,0 +1,29 @@
+{
+  "benchmark_id": "example-frames-v1",
+  "output_dir": "${MAL_RUNS_ROOT}/marine_autolabel/example",
+  "manifest": "configs/example_frames.json",
+  "profile": "underwater",
+
+  "models": {
+    "click": "claude-opus-5",
+    "verify": "claude-opus-5",
+    "phrase": "claude-sonnet-5",
+    "firstpass": "claude-sonnet-5",
+    "quality_screen": "claude-sonnet-5",
+    "effort": "medium"
+  },
+
+  "clicks": {
+    "strategy": "S3_cons_temp",
+    "finder_mode": "mask-guided",
+    "mask_generator": "hybrid",
+    "whole_frame_review": false,
+    "mask_guided_passes": 0,
+    "border_scan": "last",
+    "max_repair_rounds": 4,
+    "min_recovery_confidence": 0.5,
+    "temporal_offsets": [15, 30, 45]
+  },
+
+  "text": {"mode": "adaptive", "threshold": 0.4, "min_confidence": 0.5}
+}

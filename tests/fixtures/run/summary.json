@@ -1,0 +1,52 @@
+{
+ "benchmark_id": "example-frames-v1",
+ "model": "claude-opus-5",
+ "phrase_model": "claude-sonnet-5",
+ "firstpass_model": "claude-sonnet-5",
+ "anthropic_effort": "medium",
+ "firstpass_root": "${MAL_RUNS_ROOT}/example/firstpass",
+ "firstpass_skipped": false,
+ "initial_mask_root": null,
+ "selection_manifest": "${MAL_SEATUBE_ROOT}/example/selection_manifest.json",
+ "text_proposal_mode": "adaptive",
+ "text_proposal_threshold": 0.4,
+ "min_text_confidence": 0.5,
+ "finder_mode": "mask-guided",
+ "strategy": "S3_cons_temp",
+ "whole_frame_review": false,
+ "mask_generator": "hybrid",
+ "max_click_groups_per_pass": 0,
+ "zoom_crop_frac": 0.5,
+ "click_localization_crop_frac": 0.65,
+ "visual_qa_focus": null,
+ "persistent_firstpass_mask_guidance": true,
+ "persistent_click_masks_between_passes": true,
+ "mask_guided_passes": 0,
+ "sparse_extra_pass": false,
+ "border_scan": "last",
+ "min_recovery_confidence": 0.5,
+ "temporal_offsets": [
+  15,
+  30,
+  45
+ ],
+ "temporal_seconds": [
+  0.5,
+  1.0
+ ],
+ "exploratory_not_scored": true,
+ "api_failure_count": 0,
+ "source_provenance": {
+  "git": {
+   "sha": "0000000000000000000000000000000000000000",
+   "dirty": false
+  },
+  "sha256": {}
+ },
+ "frames": [
+  {
+   "frame_id": "example_wide_scene",
+   "n_final": 6
+  }
+ ]
+}

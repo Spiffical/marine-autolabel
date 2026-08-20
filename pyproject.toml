@@ -1,0 +1,66 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "marine-autolabel"
+version = "0.1.0"
+description = "MLLM-guided exhaustive instance segmentation of marine life in underwater video"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{name = "Spencer Bialek"}]
+
+dependencies = [
+    "anthropic>=0.104",
+    "numpy>=1.26,<2",           # upper bound inherited from sam3
+    "opencv-python-headless>=4.9",
+    "pycocotools>=2.0.8",
+    "python-dotenv>=1.0",
+    "pillow>=10.0",
+]
+
+[project.optional-dependencies]
+# SAM3 itself is an optional extra: the pure-python stages (config, rle,
+# postprocess, eval, prompt construction) import and test without CUDA,
+# which is what keeps CI runnable on the Mac and on GitHub runners.
+sam3 = [
+    "sam3 @ git+https://github.com/Spiffical/sam3@f209f98",
+    "torch>=2.7",
+    "timm>=1.0.17",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov",
+    "ruff>=0.6",
+]
+
+[project.scripts]
+mal-pipeline  = "marine_autolabel.cli.run_pipeline:main"
+mal-firstpass = "marine_autolabel.cli.run_firstpass:main"
+mal-eval      = "marine_autolabel.cli.run_eval:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+marine_autolabel = ["prompts/*.txt"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["tests"]
+markers = [
+    "gpu: requires CUDA and the sam3 extra",
+    "api: requires a live ANTHROPIC_API_KEY",
+]
+addopts = "-m 'not gpu and not api'"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+# Pinned explicitly: relying on ruff's defaults means lint results change when
+# ruff updates. The ported pipeline code parses untrusted model output and uses
+# deliberate broad `except Exception` around numeric coercion, so the S/BLE
+# families are excluded rather than silenced case by case.
+select = ["E", "F", "I", "UP", "B"]

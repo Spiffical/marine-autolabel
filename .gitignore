@@ -1,0 +1,38 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# secrets
+.env
+
+# data, weights, outputs — never in git
+runs/
+outputs/
+weights/
+*.pth
+*.pt
+*.safetensors
+*.mp4
+assets/videos/
+
+# generated report assets (regenerable; keep the markdown, not the PNGs)
+docs/*_assets/
+
+.DS_Store
+
+# host-specific notes and tooling — local only, never committed
+docs/LOCAL_NOTES.md
+LOCAL_NOTES.md
+infra/*_local.sh
+
+# Research findings, presentation material and captured run data — local only.
+# The public repo ships the pipeline, not unpublished results or third-party
+# annotation data.
+private/

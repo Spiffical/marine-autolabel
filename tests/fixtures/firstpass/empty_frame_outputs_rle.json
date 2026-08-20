@@ -1,0 +1,22 @@
+{
+ "format_version": 2,
+ "source": "sam3_agent_every_frame",
+ "frame_size_hw": [
+  720,
+  1280
+ ],
+ "total_video_frames": 300,
+ "num_frames_with_outputs": 1,
+ "invalid_frame_indices": [],
+ "keyframe_indices": [],
+ "frames": [
+  {
+   "frame_index": 0,
+   "out_obj_ids": [],
+   "out_probs": [],
+   "out_tracker_probs": [],
+   "out_boxes_xywh": [],
+   "out_binary_masks_rle": []
+  }
+ ]
+}
