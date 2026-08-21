@@ -198,6 +198,35 @@ class TestSecondOpinion:
         )
         assert kept[0]["creature_confidence"] == 0.75
 
+    def test_a_confirming_reject_with_a_repair_click_feeds_the_repair_loop(self):
+        """A closer look may downgrade "no organism" to a fixable defect."""
+        second = {
+            "keep": False, "failure": "fragment",
+            "repair_click": {"x": 0.6, "y": 0.6, "label": 1},
+        }
+        _, dropped = verify_masks(
+            [result()],
+            judge=judge_returning(self.BACKGROUND_REJECT),
+            second_opinion=judge_returning(second),
+        )
+        assert dropped[0]["mask_second_opinion"] == "confirmed_reject"
+        assert dropped[0]["mask_quality_failure"] == "fragment"
+        assert dropped[0]["mask_quality_repair_click"] == {
+            "x": 0.6, "y": 0.6, "label": 1}
+
+    def test_a_double_background_reject_keeps_no_repair_click(self):
+        second = {
+            "keep": False, "failure": "background",
+            "repair_click": {"x": 0.6, "y": 0.6, "label": 1},
+        }
+        _, dropped = verify_masks(
+            [result()],
+            judge=judge_returning(self.BACKGROUND_REJECT),
+            second_opinion=judge_returning(second),
+        )
+        assert dropped[0]["mask_quality_failure"] == "background"
+        assert dropped[0]["mask_quality_repair_click"] is None
+
     def test_strictness_applies_to_the_second_opinion_too(self):
         answer = {"keep": True, "complete_identity": True, "single_identity": False}
         kept, dropped = verify_masks(

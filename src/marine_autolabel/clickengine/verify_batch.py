@@ -99,6 +99,15 @@ def verify_masks(
                 result["mask_second_opinion"] = "kept"
             else:
                 result["mask_second_opinion"] = "confirmed_reject"
+                # The second, closer look may downgrade "no organism" to a
+                # fixable defect; adopt its failure and repair click so the
+                # repair loop can act on the more careful verdict.
+                second_failure = str(second.get("failure", "")).strip().lower()
+                second_repair = mask_quality_repair_click(second)
+                if second_repair is not None and second_failure != "background":
+                    if second_failure in KNOWN_FAILURES:
+                        result["mask_quality_failure"] = second_failure
+                    result["mask_quality_repair_click"] = second_repair
 
         result["creature_confidence"] = (
             confidence

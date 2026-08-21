@@ -388,6 +388,8 @@ def cmd_verify_apply(root: Path, pass_idx: int, round_n: int) -> None:
                       f"{second_file.name}")
             else:
                 second = _answer_json(second_file.read_text())
+                second_failure = str(second.get("failure", "")).strip().lower()
+                repair2 = mask_quality_repair_click(second)
                 if accept_mask_verdict(second, strict_identity=True):
                     conf2 = coerce_confidence(second.get("confidence"))
                     group["confidence"] = conf2 if conf2 is not None else 0.6
@@ -395,6 +397,26 @@ def cmd_verify_apply(root: Path, pass_idx: int, round_n: int) -> None:
                     group["status"] = "verified"
                     group["second_opinion"] = "kept"
                     kept += 1
+                elif (repair2 and second_failure != "background"
+                        and group["repair_round"] < MAX_REPAIR_ROUNDS
+                        and is_actionable_repair_click(repair2, prior)):
+                    # The second, closer look found a real organism with a
+                    # fixable mask; route its verdict through the repair loop
+                    # exactly as a first-opinion fragment/merge would go.
+                    group["failure"] = (second_failure
+                                        if second_failure in KNOWN_FAILURES
+                                        else group["failure"])
+                    group["repair_history"].append(
+                        {"round": group["repair_round"] + 1,
+                         "failure": group["failure"] or "unknown",
+                         "click": repair2})
+                    group["clicks"].append(repair2)
+                    group["repair_round"] += 1
+                    group["iteration"] = 0
+                    group["duplicate_retries"] = 0
+                    group["status"] = "active"
+                    group["second_opinion"] = "repair"
+                    repairable += 1
                 else:
                     group["status"] = "dropped"
                     group["second_opinion"] = "confirmed_reject"
