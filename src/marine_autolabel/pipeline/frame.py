@@ -186,6 +186,7 @@ def process_frame(
                     "n_nms_removed": batch.get("mask_nms_removed"),
                     "n_low_confidence": len(batch.get("low_confidence") or []),
                     "repair_rounds": batch.get("repair_rounds"),
+                    "rejection_reasons": batch.get("rejection_reasons"),
                     "hit_round_cap": bool(batch.get("hit_round_cap")),
                 }
             )

@@ -307,3 +307,30 @@ class TestAttritionReporting:
         )
         assert outcome.passes[0]["n_recovered"] == 0
         assert outcome.passes[0]["n_low_confidence"] == 0
+
+
+class TestRejectionReporting:
+    def test_rejection_reasons_reach_the_pass_record(self):
+        """A starved repair loop looks identical to one that never helps.
+
+        If nothing the verifier rejects carries an actionable repair click,
+        repair CANNOT contribute -- and without this breakdown that is
+        indistinguishable from repair being tried and failing.
+        """
+        reasons = {"with_repair_click": 0, "no_repair_click": 5,
+                   "failures": {"None": 5}}
+        outcome = process_frame(
+            "f", FRAME, pass_count=1,
+            stages=stages(
+                discover=lambda **kw: [group()],
+                recover=lambda **kw: {
+                    "recovered": [], "n_verify_dropped": 5,
+                    "n_repair_recovered": 0, "repair_rounds": 1,
+                    "rejection_reasons": reasons,
+                },
+            ),
+        )
+        record = outcome.passes[0]
+        assert record["rejection_reasons"]["no_repair_click"] == 5
+        assert record["rejection_reasons"]["with_repair_click"] == 0
+        assert record["n_repair_recovered"] == 0

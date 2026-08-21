@@ -161,6 +161,13 @@ def build_frame_processor(
     return process
 
 
+def _tally(values: Any) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for value in values:
+        counts[value] = counts.get(value, 0) + 1
+    return dict(sorted(counts.items()))
+
+
 def _answer_json(text: str | None) -> dict[str, Any]:
     """Parse the last <answer>{...}</answer> payload, or {}."""
     import json  # noqa: PLC0415
@@ -311,6 +318,9 @@ def _build_stages(
                     ],
                     config.models.click,
                 )
+                (stage_dir / f"id{group_id}_a{attempt}_it{iteration}_judge.txt").write_text(
+                    response or "<none>"
+                )
                 return _answer_json(response)
             return judge
 
@@ -398,6 +408,7 @@ def _build_stages(
                     ],
                     config.models.verify,
                 )
+                (stage_dir / f"{tag}_verify.txt").write_text(response or "<none>")
                 return _answer_json(response)
             return judge_mask
 
@@ -405,6 +416,20 @@ def _build_stages(
             generated, judge=make_verify(0), strict_identity=True
         )
         n_verify_kept, n_verify_dropped = len(kept), len(rejected)
+
+        # A rejection is only repairable if the verifier supplied an actionable
+        # click. Recording the split makes a starved repair loop visible: a run
+        # where nothing is repairable looks identical to one where repair simply
+        # never helps.
+        rejection_reasons = {
+            "with_repair_click": sum(
+                1 for r in rejected if r.get("mask_quality_repair_click")
+            ),
+            "no_repair_click": sum(
+                1 for r in rejected if not r.get("mask_quality_repair_click")
+            ),
+            "failures": _tally(str(r.get("mask_quality_failure")) for r in rejected),
+        }
 
         def regenerate(item, repair_click):
             clicks = [dict(c) for c in (item.get("clicks_used") or [])]
@@ -439,6 +464,7 @@ def _build_stages(
             "n_generated": len(generated),
             "n_verify_kept": n_verify_kept,
             "n_verify_dropped": n_verify_dropped,
+            "rejection_reasons": rejection_reasons,
             "n_repair_recovered": repair["repaired"],
             "mask_nms_removed": nms_removed,
             "hit_round_cap": repair["hit_round_cap"],
