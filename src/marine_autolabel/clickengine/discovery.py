@@ -60,6 +60,18 @@ OUTLINE = View(
     "space of an accepted outer silhouette is NOT thereby segmented; report it "
     "if it has its own visually separable branching system or depth layer. ",
 )
+CLAHE = View(
+    "clahe",
+    "The {ordinal} image is a LOCAL-CONTRAST-ENHANCED copy of the target "
+    "frame. Organisms whose texture blends into the lit seafloor are far "
+    "easier to see here than in the raw frame. Use it to FIND such organisms, "
+    "but take all appearance and boundary judgements from the raw frame; the "
+    "enhancement exaggerates noise as well as structure. ",
+)
+"""Added 2026-08-21 after a coverage audit: a four-quadrant sweep accepted only
+organisms silhouetted against dark water and missed nearly everything textured
+against the lit seafloor. Global views carry too little local contrast there."""
+
 FOCUS_RAW = View(
     "focus_raw",
     "The {ordinal} image is an enlarged untouched crop of the required focus region. ",
@@ -120,20 +132,23 @@ TARGET_CONTRACT = (
 )
 
 
-def discovery_views(*, has_focus_crops: bool) -> tuple[View, ...]:
+def discovery_views(
+    *, has_focus_crops: bool, has_clahe: bool = False
+) -> tuple[View, ...]:
     """The ordered views for one discovery request."""
-    return BASE_VIEWS + (FOCUS_VIEWS if has_focus_crops else ())
+    views = BASE_VIEWS + ((CLAHE,) if has_clahe else ())
+    return views + (FOCUS_VIEWS if has_focus_crops else ())
 
 
 def build_discovery_prompt(
-    *, pass_instruction: str, has_focus_crops: bool = False
+    *, pass_instruction: str, has_focus_crops: bool = False, has_clahe: bool = False
 ) -> str:
     """The recall-first all-life discovery contract.
 
     Ordinals are derived from the view list, so a view cannot be added without
     the description renumbering itself.
     """
-    views = discovery_views(has_focus_crops=has_focus_crops)
+    views = discovery_views(has_focus_crops=has_focus_crops, has_clahe=has_clahe)
     if len(views) > len(ORDINALS):
         raise ValueError(f"no ordinal for view {len(views)}; extend ORDINALS")
 
@@ -159,7 +174,8 @@ def build_content(
     corruption rather than a crash, so it is refused here.
     """
     has_focus_crops = FOCUS_RAW.key in view_paths or FOCUS_STRONG.key in view_paths
-    views = discovery_views(has_focus_crops=has_focus_crops)
+    has_clahe = CLAHE.key in view_paths
+    views = discovery_views(has_focus_crops=has_focus_crops, has_clahe=has_clahe)
     expected = [view.key for view in views]
 
     missing = [key for key in expected if key not in view_paths]
@@ -178,7 +194,9 @@ def build_content(
         {
             "type": "text",
             "text": build_discovery_prompt(
-                pass_instruction=pass_instruction, has_focus_crops=has_focus_crops
+                pass_instruction=pass_instruction,
+                has_focus_crops=has_focus_crops,
+                has_clahe=has_clahe,
             ),
         }
     )

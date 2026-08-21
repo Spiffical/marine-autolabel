@@ -131,21 +131,22 @@ def cmd_views(root: Path, pass_idx: int, pass_count: int, video: str,
     whole = region[:4] == (0.0, 1.0, 0.0, 1.0)
     views = render_discovery_views(
         frame, _accepted_masks(state, h, w), pdir / "views",
-        focus_region=None if whole else region[:4])
+        focus_region=None if whole else region[:4], with_clahe=True)
     refs = extract_reference_frames(Path(video), frame_index, offsets, pdir / "refs")
     instruction = f"Focus this pass on {region[4]}. "
     if border:
         instruction += ("Audit the frame border specifically: life clipped by the "
                         "edge is routinely missed. ")
-    order = [k for k in ("raw", "grid", "strong", "outline", "focus_raw",
-                         "focus_strong") if k in views]
+    order = [k for k in ("raw", "grid", "strong", "outline", "clahe",
+                         "focus_raw", "focus_strong") if k in views]
     _write(pdir / "discovery_request.json", {
         "images": [views[k] for k in order] + refs,
         "prompt_file": str(pdir / "discovery_prompt.txt"),
     })
     (pdir / "discovery_prompt.txt").write_text(build_discovery_prompt(
         pass_instruction=instruction,
-        has_focus_crops="focus_raw" in views))
+        has_focus_crops="focus_raw" in views,
+        has_clahe="clahe" in views))
     print(f"pass {pass_idx}: region={region[4]!r} border={border} "
           f"views={len(order)} refs={len(refs)}")
 

@@ -28,12 +28,23 @@ def _write(path: Path, image: np.ndarray) -> str:
     return str(path)
 
 
+def clahe_enhance(frame: np.ndarray, clip_limit: float = 3.0, grid: int = 8) -> np.ndarray:
+    """Local-contrast enhancement on the L channel, colour preserved."""
+    lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+    l_channel, a_channel, b_channel = cv2.split(lab)
+    clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(grid, grid))
+    return cv2.cvtColor(
+        cv2.merge((clahe.apply(l_channel), a_channel, b_channel)), cv2.COLOR_LAB2BGR
+    )
+
+
 def render_discovery_views(
     frame: np.ndarray,
     known_masks: list[dict],
     out_dir: Path,
     *,
     focus_region: tuple[float, float, float, float] | None = None,
+    with_clahe: bool = False,
 ) -> dict[str, str]:
     """Write the discovery views and return `{view_key: path}`.
 
@@ -54,6 +65,9 @@ def render_discovery_views(
         "strong": _write(out_dir / "strong.png", strong),
         "outline": _write(out_dir / "outline.png", render_grid_overlay(outline)),
     }
+
+    if with_clahe:
+        views["clahe"] = _write(out_dir / "clahe.png", clahe_enhance(frame))
 
     if focus_region is not None:
         left, right, top, bottom = focus_region
