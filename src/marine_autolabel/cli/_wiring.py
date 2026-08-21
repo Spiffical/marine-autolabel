@@ -194,7 +194,7 @@ def _build_stages(
     from ..clickengine.loop import response_token_budget  # noqa: PLC0415
     from ..clickengine.maskgen import hybrid_policy  # noqa: PLC0415
     from ..clickengine.parsing import parse_creature_click_groups  # noqa: PLC0415
-    from ..clickengine.recovery import run_repair_rounds  # noqa: PLC0415
+    from ..clickengine.recovery import run_repair_rounds, union_extend  # noqa: PLC0415
     from ..clickengine.verify_batch import filter_by_confidence, verify_masks  # noqa: PLC0415
     from ..geometry import mask_level_nms  # noqa: PLC0415
     from ..llm.claude import send_claude_request  # noqa: PLC0415
@@ -487,6 +487,28 @@ def _build_stages(
             max_repair_rounds=config.clicks.max_repair_rounds,
         )
         kept.extend(repair["recovered"])
+
+        # Escalation for fragments the joint prompt could not extend: segment
+        # the continuation separately and union, gated by strict verification.
+        # Observed live: SAM3 refuses to bridge dim gaps when prompted jointly
+        # even with a correct click on the continuation.
+        if config.clicks.union_extend_fragments:
+            for item in repair["terminal_dropped"]:
+                repair_click = item.get("mask_quality_repair_click")
+                if item.get("mask_quality_failure") != "fragment" or not repair_click:
+                    continue
+                union = union_extend(
+                    np.asarray(item["mask"]).astype(bool), repair_click, predict
+                )
+                if union is None:
+                    continue
+                candidate = dict(item)
+                candidate["mask"] = union
+                candidate["select_reason"] = "union_extend"
+                union_kept, _ = verify_masks(
+                    [candidate], judge=make_verify(99), strict_identity=True
+                )
+                kept.extend(union_kept)
 
         kept = [r for r in kept if np.asarray(r["mask"]).astype(bool).any()]
         kept, nms_removed = mask_level_nms(kept)
