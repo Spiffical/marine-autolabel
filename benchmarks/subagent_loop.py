@@ -368,6 +368,30 @@ def cmd_verify_apply(root: Path, pass_idx: int, round_n: int) -> None:
             # Policy 2026-08-20: keep the visible extent, flagged partial.
             group["status"] = "partial"
             dropped += 1
+        elif group["failure"] == "background":
+            # Policy 2026-08-21: a background verdict permanently blacklists a
+            # location (the repeat filter will skip re-proposals), and it is
+            # the verdict we have observed to be wrong on real organisms.
+            # It therefore needs a second opinion before the drop is final.
+            second_file = Path(str(req["response_file"]).replace(
+                "_response.txt", "_response2.txt"))
+            if not second_file.exists():
+                group["status"] = "second_opinion"
+                print(f"second opinion needed: {req['tag']} -> "
+                      f"{second_file.name}")
+            else:
+                second = _answer_json(second_file.read_text())
+                if accept_mask_verdict(second, strict_identity=True):
+                    conf2 = coerce_confidence(second.get("confidence"))
+                    group["confidence"] = conf2 if conf2 is not None else 0.6
+                    group["failure"] = None
+                    group["status"] = "verified"
+                    group["second_opinion"] = "kept"
+                    kept += 1
+                else:
+                    group["status"] = "dropped"
+                    group["second_opinion"] = "confirmed_reject"
+                    dropped += 1
         else:
             group["status"] = "dropped"
             dropped += 1
