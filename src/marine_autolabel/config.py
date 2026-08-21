@@ -63,6 +63,7 @@ class ClickEngineConfig:
     min_recovery_confidence: float = 0.50
     max_repair_rounds: int = 4  # bounds the post-verify repair loop; 0 disables repair
     union_extend_fragments: bool = True  # segment a missed continuation separately and union
+    keep_partial_fragments: bool = True  # keep unrepairable single-identity fragments as partials
     persistent_firstpass_mask_guidance: bool = True
     persistent_click_masks_between_passes: bool = True
     temporal_offsets: tuple[int, ...] = (15, 30, 45)

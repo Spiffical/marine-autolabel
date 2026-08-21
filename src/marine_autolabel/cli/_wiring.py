@@ -435,6 +435,9 @@ def _build_stages(
                                             "postverify_repair_history"
                                         ),
                                         allow_all_life=True,
+                                        occlusion_addendum=(
+                                            config.clicks.keep_partial_fragments
+                                        ),
                                     ),
                                 },
                             ],
@@ -510,9 +513,31 @@ def _build_stages(
                 )
                 kept.extend(union_kept)
 
+        # Fragments of real organisms that repair could not complete: keep the
+        # visible extent, flagged partial, rather than dropping the organism.
+        # Policy decision 2026-08-20 -- the organism may simply be occluded, and
+        # a clean 75% mask beats no mask. Partials are exempt from the
+        # confidence floor because their low confidence encodes incompleteness,
+        # which is exactly what the flag declares.
+        partials: list[dict[str, Any]] = []
+        if config.clicks.keep_partial_fragments:
+            for item in repair["terminal_dropped"]:
+                mask_ok = np.asarray(item.get("mask")).astype(bool).any()
+                if (
+                    mask_ok
+                    and item.get("mask_quality_failure") == "fragment"
+                    and item.get("mask_single_identity") is True
+                ):
+                    item["partial"] = True
+                    item["select_reason"] = "partial_fragment_keep"
+                    partials.append(item)
+
         kept = [r for r in kept if np.asarray(r["mask"]).astype(bool).any()]
-        kept, nms_removed = mask_level_nms(kept)
-        confident, low = filter_by_confidence(kept, config.clicks.min_recovery_confidence)
+        kept, nms_removed = mask_level_nms(kept + partials)
+        full = [r for r in kept if not r.get("partial")]
+        partial_kept = [r for r in kept if r.get("partial")]
+        confident, low = filter_by_confidence(full, config.clicks.min_recovery_confidence)
+        confident.extend(partial_kept)
 
         return {
             "recovered": confident,
@@ -522,6 +547,7 @@ def _build_stages(
             "n_verify_dropped": n_verify_dropped,
             "rejection_reasons": rejection_reasons,
             "n_repair_recovered": repair["repaired"],
+            "n_partial_kept": sum(1 for r in confident if r.get("partial")),
             "mask_nms_removed": nms_removed,
             "hit_round_cap": repair["hit_round_cap"],
             "repair_rounds": repair["rounds_run"],

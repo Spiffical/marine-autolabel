@@ -182,6 +182,24 @@ def repair_fact(repair_history: list[dict[str, Any]] | None) -> str:
     )
 
 
+OCCLUSION_ADDENDUM = (
+    "OCCLUSION AND VISIBILITY: an organism may be partially hidden behind "
+    "another organism or object, or its far extent may fade below visibility "
+    "in dark water. If the un-masked continuation is NOT clearly visible in "
+    "the raw frame, treat the visible extent as the complete maskable target: "
+    "a termination at an occluder, or at the point where the structure becomes "
+    "indistinguishable from the background, IS a valid boundary, and "
+    "complete_identity should be judged true. Reject as an incomplete fragment "
+    "only when the SAME structure VISIBLY continues outside WHITE. "
+)
+"""Policy addendum, 2026-08-20: mask what is visible.
+
+Kept OUT of the base prompt so the base stays byte-equal to the tuned
+original; appended only when the caller opts in (`occlusion_addendum=True`,
+wired from `ClickEngineConfig.keep_partial_fragments`).
+"""
+
+
 def build_verify_prompt(
     description: str,
     mask: np.ndarray,
@@ -190,6 +208,7 @@ def build_verify_prompt(
     *,
     repair_history: list[dict[str, Any]] | None = None,
     allow_all_life: bool = True,
+    occlusion_addendum: bool = False,
 ) -> str:
     """The mask-verification rubric, shown with [raw frame, context, review sheet]."""
     desc = description or "the masked region"
@@ -208,6 +227,7 @@ def build_verify_prompt(
         "are inside the mask and BLACK pixels are outside. "
         + geometry_fact(mask, width, height)
         + repair_fact(repair_history)
+        + (OCCLUSION_ADDENDUM if occlusion_addendum else "")
         + "Cyan/WHITE having a smooth, coherent silhouette is NOT evidence "
         "that an organism exists: SAM3 can create convincing blobs from "
         "water, shadow, haze, or substrate. The untouched FIRST image must "

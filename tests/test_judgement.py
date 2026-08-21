@@ -126,3 +126,20 @@ class TestVerifyPrompt:
 
     def test_an_empty_description_gets_the_placeholder(self):
         assert "'the masked region'" in build_verify_prompt("", mask(), 1280, 720)
+
+
+class TestOcclusionAddendum:
+    def test_off_by_default_and_base_stays_byte_pure(self):
+        base = build_verify_prompt("x", mask(), 1280, 720)
+        assert "OCCLUSION AND VISIBILITY" not in base
+
+    def test_on_when_requested(self):
+        prompt = build_verify_prompt("x", mask(), 1280, 720, occlusion_addendum=True)
+        assert "OCCLUSION AND VISIBILITY" in prompt
+        assert "indistinguishable from the background, IS a valid boundary" in prompt
+        assert "only when the SAME structure VISIBLY continues" in prompt
+
+    def test_the_addendum_sits_with_the_facts_before_the_rubric(self):
+        prompt = build_verify_prompt("x", mask(), 1280, 720, occlusion_addendum=True)
+        assert prompt.index("DETERMINISTIC") < prompt.index("OCCLUSION AND VISIBILITY")
+        assert prompt.index("OCCLUSION AND VISIBILITY") < prompt.index("Cyan/WHITE having")
