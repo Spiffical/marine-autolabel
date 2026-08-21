@@ -25,16 +25,6 @@ from ..pipeline.frame import FrameOutcome, FrameStages, process_frame
 from ..pipeline.loading import load_firstpass, load_initial_masks, write_json
 from ..rle import encode_binary_mask_to_rle
 
-SYSTEM_CANDIDATE = (
-    "You are judging SAM3 segmentation candidates for one marine organism. "
-    "Answer only with the requested tag."
-)
-SYSTEM_VERIFY = (
-    "You are judging whether one segmentation mask is a tight, complete, "
-    "single-identity mask of a real marine organism. Answer only with the "
-    "requested tag."
-)
-
 
 class MissingExtraError(RuntimeError):
     """Raised when the SAM3 extra or an API key is absent."""
@@ -196,6 +186,11 @@ def _build_stages(
     from ..clickengine.crop import mask_crop_geom  # noqa: PLC0415
     from ..clickengine.discovery import build_content  # noqa: PLC0415
     from ..clickengine.generate import refine_group  # noqa: PLC0415
+    from ..clickengine.judgement import (  # noqa: PLC0415
+        DUPLICATE_FEEDBACK,
+        build_judge_prompt,
+        build_verify_prompt,
+    )
     from ..clickengine.loop import response_token_budget  # noqa: PLC0415
     from ..clickengine.maskgen import hybrid_policy  # noqa: PLC0415
     from ..clickengine.parsing import parse_creature_click_groups  # noqa: PLC0415
@@ -205,11 +200,13 @@ def _build_stages(
     from ..llm.claude import send_claude_request  # noqa: PLC0415
     from ..prompts import load as load_prompt  # noqa: PLC0415
     from ..sam3svc.zoom import predict_on_crop  # noqa: PLC0415
-    from ..viz.crops import (  # noqa: PLC0415  # noqa: PLC0415
+    from ..viz.crops import (  # noqa: PLC0415
         default_upscale,
         render_binary_mask_crop,
         render_candidate_sheet,
+        render_fullframe_candidate,
         render_mask_crop,
+        stack_review_sheet,
     )
     from ..viz.views import extract_reference_frames, render_discovery_views  # noqa: PLC0415
 
@@ -292,26 +289,34 @@ def _build_stages(
             )
 
         def make_judge(group_id: int):
-            def judge(*, masks, scores, clicks, attempt, iteration, budget_reached):
-                geom = mask_crop_geom(masks[0], clicks, width, height, 0.30)
+            def judge(
+                *, masks, scores, clicks, attempt, iteration, budget_reached,
+                duplicate_retry=False,
+            ):
+                import numpy as _np  # noqa: PLC0415
+
+                best = int(_np.argmax(scores)) if len(scores) else 0
+                geom = mask_crop_geom(masks[best], clicks, width, height, 0.30)
                 sheet = render_candidate_sheet(
                     frame, masks, clicks, geom,
                     stage_dir / f"id{group_id}_a{attempt}_it{iteration}.png",
                 )
-                suffix = (
-                    " The click budget is spent; choose good or reject."
-                    if budget_reached else ""
-                )
                 response = ask(
                     [
-                        {"role": "system", "content": SYSTEM_CANDIDATE},
                         {
                             "role": "user",
                             "content": [
+                                {"type": "image", "image": str(frame_dir / "target.png")},
                                 {"type": "image", "image": sheet},
                                 {
                                     "type": "text",
-                                    "text": load_prompt("candidate_selection") + suffix,
+                                    "text": build_judge_prompt(
+                                        descriptions.get(group_id, ""),
+                                        duplicate_feedback=(
+                                            DUPLICATE_FEEDBACK if duplicate_retry else ""
+                                        ),
+                                        budget_reached=budget_reached,
+                                    ),
                                 },
                             ],
                         },
@@ -321,7 +326,22 @@ def _build_stages(
                 (stage_dir / f"id{group_id}_a{attempt}_it{iteration}_judge.txt").write_text(
                     response or "<none>"
                 )
-                return _answer_json(response)
+                answer = _answer_json(response)
+                # The judge points WITHIN a panel; the pipeline works in
+                # full-frame coordinates. Convert here, where the geometry is
+                # known, so refine_group stays coordinate-agnostic.
+                click = answer.get("click")
+                if isinstance(click, dict):
+                    try:
+                        left, top, crop_w, crop_h = geom
+                        answer["click"] = {
+                            "x": (left + float(click["x"]) * crop_w) / width,
+                            "y": (top + float(click["y"]) * crop_h) / height,
+                            "label": int(click.get("label", 1)),
+                        }
+                    except (KeyError, TypeError, ValueError):
+                        answer.pop("click", None)
+                return answer
             return judge
 
         def zoom_predict_for(clicks_seed: list[dict[str, Any]]):
@@ -366,6 +386,10 @@ def _build_stages(
                 return full_frame()
             return hybrid_policy(full_frame, zoom)
 
+        descriptions = {
+            int(group.get("id", 0)): str(group.get("description", "")) for group in groups
+        }
+
         generated: list[dict[str, Any]] = []
         for group in groups:
             result, trace = generate_for(group)
@@ -388,19 +412,29 @@ def _build_stages(
                 binary = render_binary_mask_crop(
                     mask, geom, stage_dir / f"{tag}_binary.png", upscale
                 )
+                review = stack_review_sheet(
+                    overlay, binary, stage_dir / f"{tag}_review.png"
+                )
+                context = render_fullframe_candidate(
+                    frame, mask, stage_dir / f"{tag}_context.png"
+                )
                 response = ask(
                     [
-                        {"role": "system", "content": SYSTEM_VERIFY},
                         {
                             "role": "user",
                             "content": [
-                                {"type": "image", "image": overlay},
-                                {"type": "image", "image": binary},
+                                {"type": "image", "image": str(frame_dir / "target.png")},
+                                {"type": "image", "image": context},
+                                {"type": "image", "image": review},
                                 {
                                     "type": "text",
-                                    "text": (
-                                        f"Target: {result.get('description', '')!r}. "
-                                        + load_prompt("mask_verification")
+                                    "text": build_verify_prompt(
+                                        str(result.get("description", "")),
+                                        mask, width, height,
+                                        repair_history=result.get(
+                                            "postverify_repair_history"
+                                        ),
+                                        allow_all_life=True,
                                     ),
                                 },
                             ],

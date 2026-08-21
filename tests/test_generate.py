@@ -54,12 +54,22 @@ class TestPicking:
         assert result["area_px"] == 400
         assert trace[-1]["verdict"] == "good#0"
 
-    def test_an_out_of_range_index_falls_back_to_the_best_score(self):
+    def test_an_out_of_range_pick_snaps_to_the_smallest_valid_candidate(self):
+        """Original semantics, restored. The first port snapped to the highest
+        score, but the highest-scoring candidate is often exactly the
+        over-merged blob -- smallest-valid fights the blob problem."""
         result, _ = refine_group(
             group(), predict=constant_predict(), judge=verdicts({"verdict": "good", "index": 9}),
             width=W, height=H,
         )
-        assert result["area_px"] == 900, "index 1 has the highest score"
+        assert result["area_px"] == 400, "smallest plausible candidate wins"
+
+    def test_the_original_choice_key_is_accepted(self):
+        result, _ = refine_group(
+            group(), predict=constant_predict(), judge=verdicts({"verdict": "good", "choice": 2}),
+            width=W, height=H,
+        )
+        assert result["area_px"] == 2000, "choice=2 names the third candidate"
 
     def test_the_result_carries_the_group_identity(self):
         result, _ = refine_group(

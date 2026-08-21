@@ -20,7 +20,7 @@ from typing import Any
 
 import numpy as np
 
-from ..geometry import clean_candidate_components, duplicate_click
+from ..geometry import clean_candidate_components, duplicate_click, smallest_valid
 from .loop import click_budget_reached, iteration_indices
 
 MAX_DUPLICATE_RETRIES = 2
@@ -138,14 +138,19 @@ def refine_group(
             answer = judge(
                 masks=masks, scores=scores, clicks=clicks, attempt=attempt,
                 iteration=iteration, budget_reached=budget_reached,
+                duplicate_retry=duplicate_retries > 0,
             )
             step: dict[str, Any] = {"attempt": attempt, "iteration": iteration}
             verdict_name = str((answer or {}).get("verdict", ""))
 
             if verdict_name == "good":
-                index = (answer or {}).get("index")
+                # The original contract names this "choice"; "index" is kept as
+                # an alias for callers written against the first port.
+                index = (answer or {}).get("choice", (answer or {}).get("index"))
                 if not isinstance(index, int) or not (0 <= index < len(masks)) or not valid[index]:
-                    index = best_index
+                    # Snap to the SMALLEST plausible candidate, as the original
+                    # did -- the highest score is often the over-merged blob.
+                    index = smallest_valid(masks, valid)
                 step["verdict"] = f"good#{index}"
                 trace.append(step)
                 return (

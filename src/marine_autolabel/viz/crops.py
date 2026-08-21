@@ -116,3 +116,32 @@ def render_candidate_sheet(
     sheet = np.vstack([np.hstack(overlays), np.hstack(binaries)])
     cv2.imwrite(str(path), sheet)
     return str(path)
+
+
+def render_fullframe_candidate(frame: np.ndarray, mask: np.ndarray, path: Path) -> str:
+    """The candidate in cyan on the WHOLE frame -- the verifier's context view.
+
+    A zoomed crop of empty water is indistinguishable from a faint organism;
+    only the full frame shows there is nothing there. Weights and contour
+    thickness match the original (0.42/0.58, thickness 3).
+    """
+    mask = np.asarray(mask).astype(bool)
+    tinted = frame.copy()
+    tinted[mask] = CYAN
+    out = cv2.addWeighted(tinted, 0.42, frame, 0.58, 0)
+    contours, _ = cv2.findContours(
+        mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
+    cv2.drawContours(out, contours, -1, CYAN, 3, cv2.LINE_AA)
+    cv2.imwrite(str(path), out)
+    return str(path)
+
+
+def stack_review_sheet(overlay_path: str, binary_path: str, path: Path) -> str:
+    """One aligned sheet: zoomed overlay above exact binary truth."""
+    overlay = cv2.imread(str(overlay_path))
+    binary = cv2.imread(str(binary_path))
+    if overlay is None or binary is None:
+        raise RuntimeError("could not render mask quality review sheet")
+    cv2.imwrite(str(path), np.vstack([overlay, binary]))
+    return str(path)
