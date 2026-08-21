@@ -76,7 +76,14 @@ from marine_autolabel.sam3svc.text import (
 )
 from marine_autolabel.viz.views import extract_reference_frames, render_discovery_views
 
-MAX_CLICKS = 5
+MAX_CLICKS = 10
+"""Per-group click ceiling across discovery, judge, and repair additions.
+
+Raised from 5 (2026-08-21): dense scenes need several positives along a
+colony plus a negative on each interweaving neighbour, and at 5 the thicket
+groups reached the judge with 1-2 clicks of headroom, forcing accept-or-reject
+on merged candidates. Sparse scenes never approach the ceiling, and the
+iteration and repair-round caps still bound total work per group."""
 MAX_AREA_FRAC = 0.60
 MIN_CONFIDENCE = 0.5
 MAX_REPAIR_ROUNDS = 2
