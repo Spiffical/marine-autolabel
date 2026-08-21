@@ -542,14 +542,14 @@ def cmd_fp_gen(root: Path) -> None:
             state_out = processor.set_image(image)
             state_out = processor.set_text_prompt(state=state_out, prompt=spec.text)
         masks, boxes, scores = state_out["masks"], state_out["boxes"], state_out["scores"]
-        masks = (masks.squeeze(1).detach().cpu().numpy()
+        masks = (masks.squeeze(1).detach().float().cpu().numpy()
                  if torch.is_tensor(masks) else np.asarray(masks).squeeze(1))
         if masks.ndim == 2:
             masks = masks[np.newaxis, ...]
-        boxes = (boxes.detach().cpu().numpy()
+        boxes = (boxes.detach().float().cpu().numpy()
                  if torch.is_tensor(boxes) else np.asarray(boxes))
         boxes = boxes.reshape(-1, 4) if boxes.size else np.zeros((0, 4))
-        scores = (scores.detach().cpu().numpy()
+        scores = (scores.detach().float().cpu().numpy()
                   if torch.is_tensor(scores) else np.asarray(scores)).reshape(-1)
         kept = excluded = 0
         for i in range(masks.shape[0]):
