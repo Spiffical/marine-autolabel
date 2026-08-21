@@ -32,12 +32,12 @@ from typing import Any
 import numpy as np
 
 from ..clickengine.sweep import (
+    dedup_proposals,
     discovery_focus_region,
     filter_prior_attempt_groups,
     first_positive_click,
     should_run_border_scan,
 )
-from ..geometry import geom_dedup
 
 MAX_CONVERGENCE_PASSES = 12
 """Hard ceiling on convergence mode.
@@ -156,7 +156,7 @@ def process_frame(
             continue
 
         fresh, skipped = filter_prior_attempt_groups(proposed, prior_attempts)
-        deduped, dedup_removed = geom_dedup(fresh, width, height, px=click_dedup_px)
+        deduped, dedup_removed = dedup_proposals(fresh, width, height, px=click_dedup_px)
         record.update(
             n_repeat_skipped=len(skipped), n_dedup_removed=dedup_removed, n_run=len(deduped)
         )

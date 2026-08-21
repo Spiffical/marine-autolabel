@@ -216,3 +216,63 @@ class TestFirstPositiveClick:
         clicks = [{"x": 0.2, "y": 0.2, "label": 1}]
         first_positive_click({"clicks": clicks})["x"] = 9.0
         assert clicks[0]["x"] == 0.2
+
+
+class TestDescriptionAwareDedup:
+    """Proximity alone must not collapse two distinct organisms.
+
+    Live failures: a cap-and-stem organism 39.7 px from a whip's seed, and a
+    translucent whip near a branching coral, both removed by the pure 40 px
+    rule in dense scenes.
+    """
+
+    @staticmethod
+    def _group(x, y, description):
+        return {"id": 0, "description": description,
+                "clicks": [{"x": x, "y": y, "label": 1}]}
+
+    def test_nearby_distinct_organisms_both_survive(self):
+        from marine_autolabel.clickengine.sweep import dedup_proposals
+
+        groups = [
+            self._group(0.573, 0.417, "thin bright vertical sea whip"),
+            self._group(0.604, 0.451, "bright cap-and-stem mushroom sponge"),
+        ]
+        kept, removed = dedup_proposals(groups, 1280, 720, px=40)
+        assert removed == 0 and len(kept) == 2
+
+    def test_two_markers_on_the_same_animal_still_collapse(self):
+        from marine_autolabel.clickengine.sweep import dedup_proposals
+
+        groups = [
+            self._group(0.500, 0.500, "large tan bushy coral colony"),
+            self._group(0.510, 0.505, "tan bushy coral colony"),
+        ]
+        kept, removed = dedup_proposals(groups, 1280, 720, px=40)
+        assert removed == 1 and len(kept) == 1
+
+    def test_distant_same_description_groups_are_kept(self):
+        from marine_autolabel.clickengine.sweep import dedup_proposals
+
+        groups = [
+            self._group(0.1, 0.1, "sea whip"),
+            self._group(0.9, 0.9, "sea whip"),
+        ]
+        kept, removed = dedup_proposals(groups, 1280, 720, px=40)
+        assert removed == 0 and len(kept) == 2
+
+    def test_empty_descriptions_defer_to_proximity(self):
+        from marine_autolabel.clickengine.sweep import dedup_proposals
+
+        groups = [self._group(0.5, 0.5, ""), self._group(0.505, 0.5, "")]
+        kept, removed = dedup_proposals(groups, 1280, 720, px=40)
+        assert removed == 1, "no description evidence -> the old behaviour"
+
+    def test_survivors_are_renumbered(self):
+        from marine_autolabel.clickengine.sweep import dedup_proposals
+
+        groups = [
+            self._group(0.1, 0.1, "a"), self._group(0.5, 0.5, "b"),
+        ]
+        kept, _ = dedup_proposals(groups, 1280, 720)
+        assert [g["id"] for g in kept] == [1, 2]

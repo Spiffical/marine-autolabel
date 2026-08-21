@@ -174,6 +174,60 @@ def filter_prior_attempt_groups(
     return kept, skipped
 
 
+def dedup_proposals(
+    groups: list[dict[str, Any]],
+    width: int,
+    height: int,
+    *,
+    px: int = 40,
+    description_overlap_threshold: float = DEFAULT_DESCRIPTION_OVERLAP,
+) -> tuple[list[dict[str, Any]], int]:
+    """Description-aware click dedup.
+
+    The pure 40 px geometric dedup removed two REAL organisms in two dense
+    passes (a cap-and-stem 39.7 px from a whip's seed; a translucent whip near
+    a branching coral) -- in crowded scenes, distinct organisms routinely stand
+    closer than 40 px. So proximity alone no longer collapses two proposals:
+    they must ALSO describe the same thing, judged by the same token-overlap
+    rule the cross-pass repeat filter uses.
+
+    Two markers on the same animal still collapse, because their descriptions
+    agree. Surviving groups are renumbered from 1.
+    """
+    kept: list[dict[str, Any]] = []
+    removed = 0
+    for group in groups:
+        seed = first_positive_click(group)
+        if seed is None:
+            kept.append(group)
+            continue
+        tokens = _description_tokens(group.get("description"))
+        is_dup = False
+        for other in kept:
+            other_seed = first_positive_click(other)
+            if other_seed is None:
+                continue
+            near = (
+                abs(seed["x"] - other_seed["x"]) * width < px
+                and abs(seed["y"] - other_seed["y"]) * height < px
+            )
+            if not near:
+                continue
+            other_tokens = _description_tokens(other.get("description"))
+            smaller = min(len(tokens), len(other_tokens))
+            overlap = len(tokens & other_tokens) / smaller if smaller else 1.0
+            if overlap >= description_overlap_threshold:
+                is_dup = True
+                break
+        if is_dup:
+            removed += 1
+        else:
+            kept.append(group)
+    for index, group in enumerate(kept, 1):
+        group["id"] = index
+    return kept, removed
+
+
 def click_counts(clicks: list[dict[str, Any]]) -> dict[str, int]:
     """How many foreground and background clicks a group carries."""
     return {

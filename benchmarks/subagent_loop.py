@@ -40,6 +40,7 @@ from marine_autolabel.clickengine.judgement import (
 from marine_autolabel.clickengine.parsing import parse_creature_click_groups
 from marine_autolabel.clickengine.recovery import is_actionable_repair_click
 from marine_autolabel.clickengine.sweep import (
+    dedup_proposals,
     discovery_focus_region,
     filter_prior_attempt_groups,
     first_positive_click,
@@ -56,7 +57,6 @@ from marine_autolabel.clickengine.verify_batch import (
 from marine_autolabel.geometry import (
     clean_candidate_components,
     duplicate_click,
-    geom_dedup,
     mask_level_nms,
     smallest_valid,
 )
@@ -158,7 +158,7 @@ def cmd_groups(root: Path, pass_idx: int) -> None:
     response = (pdir / "discovery_response.txt").read_text()
     proposed = parse_creature_click_groups(response)
     fresh, skipped = filter_prior_attempt_groups(proposed, state["prior_attempts"])
-    deduped, removed = geom_dedup(fresh, w, h, px=40)
+    deduped, removed = dedup_proposals(fresh, w, h, px=40)
     for group in deduped:
         seed = first_positive_click(group)
         if seed:
