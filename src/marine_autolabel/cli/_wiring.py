@@ -367,7 +367,7 @@ def _build_stages(
             def full_frame():
                 return refine_group(
                     group, predict=predict, judge=make_judge(group_id),
-                    width=width, height=height, max_clicks=5, strict_quality=True,
+                    width=width, height=height, max_clicks=config.clicks.max_clicks, strict_quality=True,
                 )
 
             def zoom():
@@ -478,7 +478,8 @@ def _build_stages(
                  "clicks": clicks},
                 predict=predict,
                 judge=make_judge(int(item.get("creature_id", 0))),
-                width=width, height=height, max_clicks=5, strict_quality=True,
+                width=width, height=height,
+                max_clicks=config.clicks.max_clicks, strict_quality=True,
             )
             return result
 

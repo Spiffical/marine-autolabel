@@ -62,6 +62,9 @@ class ClickEngineConfig:
     click_localization_crop_frac: float = 0.65
     min_recovery_confidence: float = 0.50
     max_repair_rounds: int = 4  # bounds the post-verify repair loop; 0 disables repair
+    max_clicks: int = 10  # per-group ceiling; dense scenes need positives along a
+    # colony plus a negative per interweaving neighbour, and sparse scenes never
+    # approach it (validated on the 04 thicket rerun, 2026-08-21)
     union_extend_fragments: bool = True  # segment a missed continuation separately and union
     keep_partial_fragments: bool = True  # keep unrepairable single-identity fragments as partials
     persistent_firstpass_mask_guidance: bool = True
