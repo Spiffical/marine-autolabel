@@ -312,7 +312,7 @@ def cmd_verify_mat(root: Path, pass_idx: int, round_n: int) -> None:
         (vdir / f"{tag}_prompt.txt").write_text(build_verify_prompt(
             group["description"], mask, w, h,
             repair_history=group["repair_history"] or None,
-            allow_all_life=True))
+            allow_all_life=True, occlusion_addendum=True))
         group["verify_round"] = round_n
         requests.append({
             "gid": gid, "tag": tag,
@@ -344,6 +344,7 @@ def cmd_verify_apply(root: Path, pass_idx: int, round_n: int) -> None:
             group["status"] = "verified"
             kept += 1
             continue
+        single = answer.get("single_identity") is True
         repair = mask_quality_repair_click(answer)
         prior = [c for c in group["clicks"] if c.get("label") in (0, 1)]
         if (repair and group["repair_round"] < MAX_REPAIR_ROUNDS
@@ -357,11 +358,17 @@ def cmd_verify_apply(root: Path, pass_idx: int, round_n: int) -> None:
             group["duplicate_retries"] = 0
             group["status"] = "active"       # back through gen/judge
             repairable += 1
+        elif group["failure"] == "fragment" and single:
+            # Policy 2026-08-20: keep the visible extent, flagged partial.
+            group["status"] = "partial"
+            dropped += 1
         else:
             group["status"] = "dropped"
             dropped += 1
     _write(pdir / "groups.json", groups)
-    print(f"kept={kept} dropped={dropped} repair_pending={repairable}")
+    partial = sum(1 for g in groups.values() if g["status"] == "partial")
+    print(f"kept={kept} dropped={dropped} (partial-kept {partial}) "
+          f"repair_pending={repairable}")
 
 
 def cmd_accept(root: Path, pass_idx: int) -> None:
@@ -372,21 +379,25 @@ def cmd_accept(root: Path, pass_idx: int) -> None:
     groups = _read(pdir / "groups.json")
     results = []
     for gid, group in groups.items():
-        if group["status"] != "verified":
+        if group["status"] not in ("verified", "partial"):
             continue
         mask = decode_rle_to_mask(group["picked_rle"], h, w).astype(bool)
         seed = first_positive_click({"clicks": group["clicks"]})
         results.append({"mask": mask, "seed_click": seed, "gid": gid,
                         "confidence": group.get("confidence", 0.0),
+                        "partial": group["status"] == "partial",
                         "description": group["description"]})
     results = [r for r in results if r["mask"].any()]
     results, nms_removed = mask_level_nms(results)
-    confident = [r for r in results if r["confidence"] >= MIN_CONFIDENCE]
+    confident = [r for r in results
+                 if r.get("partial") or r["confidence"] >= MIN_CONFIDENCE]
     for r in confident:
         state["accepted"].append({
             "rle": encode_binary_mask_to_rle(r["mask"]),
             "description": r["description"], "confidence": r["confidence"],
             "pass": pass_idx, "gid": r["gid"],
+            **({"partial": True, "select_reason": "partial_fragment_keep"}
+               if r.get("partial") else {}),
         })
     state["passes"].append({
         "pass": pass_idx,
