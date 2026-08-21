@@ -41,6 +41,7 @@ def verify_masks(
     *,
     judge: Callable[[dict[str, Any]], dict[str, Any]],
     strict_identity: bool = False,
+    second_opinion: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Split results into `(kept, dropped)`, annotating each in place.
 
@@ -50,6 +51,18 @@ def verify_masks(
     `mask_single_identity`, `mask_quality_failure` and
     `mask_quality_repair_click`. The repair click is what feeds the bounded
     repair loop in `recovery.py`.
+
+    `second_opinion`, when provided, is consulted before a `background`
+    rejection with no repair click becomes final. A background verdict is the
+    one rejection that permanently blacklists a location -- the prior-attempt
+    filter skips any same-description re-proposal -- and it is the verdict
+    caught being wrong on a real organism (a corner anemone two discovery
+    passes and a judge had each confirmed). If the second answer keeps, the
+    mask is kept with that answer's confidence, marked
+    `mask_second_opinion="kept"`; if it also rejects, the drop stands, marked
+    `"confirmed_reject"`. Rejections carrying a repair click skip the second
+    opinion: the repair loop is the cheaper path, and by proposing a fix the
+    verifier already treated the organism as real.
     """
     kept: list[dict[str, Any]] = []
     dropped: list[dict[str, Any]] = []
@@ -65,11 +78,28 @@ def verify_masks(
         confidence = coerce_confidence(answer.get("confidence"))
         keep = accept_mask_verdict(answer, strict_identity=strict_identity)
         failure = str(answer.get("failure", "")).strip().lower()
+        repair = mask_quality_repair_click(answer)
 
         result["mask_complete_identity"] = answer.get("complete_identity") is True
         result["mask_single_identity"] = answer.get("single_identity") is True
         result["mask_quality_failure"] = failure if failure in KNOWN_FAILURES else None
-        result["mask_quality_repair_click"] = mask_quality_repair_click(answer)
+        result["mask_quality_repair_click"] = repair
+
+        if (
+            not keep
+            and failure == "background"
+            and repair is None
+            and second_opinion is not None
+        ):
+            second = second_opinion(result) or {}
+            if accept_mask_verdict(second, strict_identity=strict_identity):
+                keep = True
+                confidence = coerce_confidence(second.get("confidence"))
+                result["mask_quality_failure"] = None
+                result["mask_second_opinion"] = "kept"
+            else:
+                result["mask_second_opinion"] = "confirmed_reject"
+
         result["creature_confidence"] = (
             confidence
             if confidence is not None

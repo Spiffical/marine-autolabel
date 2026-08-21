@@ -399,13 +399,13 @@ def _build_stages(
             )
             generated.append(result)
 
-        def make_verify(round_number: int):
+        def make_verify(round_number: int, suffix: str = ""):
             def judge_mask(result: dict[str, Any]) -> dict[str, Any]:
                 mask = np.asarray(result["mask"]).astype(bool)
                 clicks = result.get("clicks_used") or []
                 geom = mask_crop_geom(mask, clicks, width, height, 0.22)
                 upscale = default_upscale(geom[2], geom[3])
-                tag = f"r{round_number}_id{result.get('creature_id', 0)}"
+                tag = f"r{round_number}_id{result.get('creature_id', 0)}{suffix}"
                 overlay = render_mask_crop(
                     frame, mask, clicks, geom, stage_dir / f"{tag}.png", upscale
                 )
@@ -450,7 +450,8 @@ def _build_stages(
             return judge_mask
 
         kept, rejected = verify_masks(
-            generated, judge=make_verify(0), strict_identity=True
+            generated, judge=make_verify(0), strict_identity=True,
+            second_opinion=make_verify(0, suffix="_second"),
         )
         n_verify_kept, n_verify_dropped = len(kept), len(rejected)
 

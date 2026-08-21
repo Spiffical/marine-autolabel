@@ -123,6 +123,93 @@ class TestVerifyMasks:
         assert calls == [1, 2]
 
 
+class TestSecondOpinion:
+    BACKGROUND_REJECT = {"keep": False, "failure": "background", "confidence": 0.05}
+
+    def test_a_background_reject_is_reprieved_by_a_keeping_second_opinion(self):
+        kept, dropped = verify_masks(
+            [result()],
+            judge=judge_returning(self.BACKGROUND_REJECT),
+            second_opinion=judge_returning({"keep": True, "confidence": 0.78}),
+        )
+        assert dropped == [] and len(kept) == 1
+        assert kept[0]["creature_confidence"] == 0.78
+        assert kept[0]["mask_quality_failure"] is None
+        assert kept[0]["mask_second_opinion"] == "kept"
+
+    def test_a_confirmed_background_reject_stays_dropped(self):
+        kept, dropped = verify_masks(
+            [result()],
+            judge=judge_returning(self.BACKGROUND_REJECT),
+            second_opinion=judge_returning({"keep": False, "confidence": 0.1}),
+        )
+        assert kept == [] and len(dropped) == 1
+        assert dropped[0]["mask_second_opinion"] == "confirmed_reject"
+        assert dropped[0]["mask_quality_failure"] == "background"
+
+    def test_without_the_callable_behaviour_is_unchanged(self):
+        kept, dropped = verify_masks(
+            [result()], judge=judge_returning(self.BACKGROUND_REJECT)
+        )
+        assert kept == [] and len(dropped) == 1
+        assert "mask_second_opinion" not in dropped[0]
+
+    def test_a_repairable_background_reject_skips_the_second_call(self):
+        """A verifier proposing a fix already treated the organism as real."""
+        calls = []
+        answer = {
+            "keep": False, "failure": "background",
+            "repair_click": {"x": 0.4, "y": 0.4, "label": 0},
+        }
+        _, dropped = verify_masks(
+            [result()],
+            judge=judge_returning(answer),
+            second_opinion=lambda r: calls.append(r) or {"keep": True},
+        )
+        assert calls == []
+        assert len(dropped) == 1
+
+    @pytest.mark.parametrize("failure", ["fragment", "merge", "wrong"])
+    def test_other_failures_never_consult_the_second_opinion(self, failure):
+        calls = []
+        _, dropped = verify_masks(
+            [result()],
+            judge=judge_returning({"keep": False, "failure": failure}),
+            second_opinion=lambda r: calls.append(r) or {"keep": True},
+        )
+        assert calls == []
+        assert len(dropped) == 1
+
+    def test_a_kept_mask_never_consults_the_second_opinion(self):
+        calls = []
+        kept, _ = verify_masks(
+            [result()],
+            judge=judge_returning({"keep": True, "confidence": 0.9}),
+            second_opinion=lambda r: calls.append(r) or {"keep": False},
+        )
+        assert calls == []
+        assert kept[0]["creature_confidence"] == 0.9
+
+    def test_a_reprieve_without_confidence_uses_the_kept_fallback(self):
+        kept, _ = verify_masks(
+            [result()],
+            judge=judge_returning(self.BACKGROUND_REJECT),
+            second_opinion=judge_returning({"keep": True}),
+        )
+        assert kept[0]["creature_confidence"] == 0.75
+
+    def test_strictness_applies_to_the_second_opinion_too(self):
+        answer = {"keep": True, "complete_identity": True, "single_identity": False}
+        kept, dropped = verify_masks(
+            [result()],
+            judge=judge_returning(self.BACKGROUND_REJECT),
+            second_opinion=judge_returning(answer),
+            strict_identity=True,
+        )
+        assert kept == [] and len(dropped) == 1
+        assert dropped[0]["mask_second_opinion"] == "confirmed_reject"
+
+
 class TestConfidenceFilter:
     def test_splits_on_the_threshold(self):
         results = [
