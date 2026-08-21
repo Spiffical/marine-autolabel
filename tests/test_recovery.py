@@ -175,3 +175,79 @@ class TestRepairRounds:
             verify=verify,
         )
         assert seen == [1]
+
+
+class TestUnionExtend:
+    """Extending a fragment by segmenting the continuation separately."""
+
+    H = W = 100
+
+    @classmethod
+    def _mask(cls, y0, y1, x0, x1):
+        m = np.zeros((cls.H, cls.W), dtype=bool)
+        m[y0:y1, x0:x1] = True
+        return m
+
+    @classmethod
+    def _predict_returning(cls, *boxes, scores=None):
+        stack = np.stack([cls._mask(*b) for b in boxes])
+        return lambda clicks: (stack, np.array(scores or [0.8] * len(boxes)))
+
+    def test_an_adjacent_continuation_is_unioned(self):
+        from marine_autolabel.clickengine.recovery import union_extend
+
+        crown = self._mask(10, 50, 40, 60)
+        stalk_click = {"x": 0.5, "y": 0.65, "label": 1}
+        predict = self._predict_returning((50, 80, 45, 55))  # contains the click
+        out = union_extend(crown, stalk_click, predict)
+        assert out is not None
+        assert out[30, 50] and out[70, 50], "both crown and stalk present"
+
+    def test_a_candidate_not_containing_the_click_is_ignored(self):
+        from marine_autolabel.clickengine.recovery import union_extend
+
+        crown = self._mask(10, 50, 40, 60)
+        click = {"x": 0.5, "y": 0.65, "label": 1}
+        predict = self._predict_returning((80, 95, 5, 15))  # elsewhere entirely
+        assert union_extend(crown, click, predict) is None
+
+    def test_a_distant_component_cannot_be_glued_on(self):
+        """A stray segment elsewhere must not attach to the mask."""
+        from marine_autolabel.clickengine.recovery import union_extend
+
+        crown = self._mask(0, 10, 0, 10)
+        click = {"x": 0.9, "y": 0.9, "label": 1}
+        predict = self._predict_returning((85, 95, 85, 95))  # contains click, far away
+        assert union_extend(crown, click, predict, max_gap_px=20) is None
+
+    def test_a_trivial_sliver_is_not_worth_a_union(self):
+        from marine_autolabel.clickengine.recovery import union_extend
+
+        crown = self._mask(10, 50, 40, 60)
+        click = {"x": 0.5, "y": 0.52, "label": 1}
+        predict = self._predict_returning((50, 52, 49, 52))  # ~6 px extension
+        assert union_extend(crown, click, predict) is None
+
+    def test_the_smallest_plausible_containing_candidate_wins(self):
+        from marine_autolabel.clickengine.recovery import union_extend
+
+        crown = self._mask(10, 50, 40, 60)
+        click = {"x": 0.5, "y": 0.65, "label": 1}
+        predict = self._predict_returning(
+            (50, 99, 0, 99),   # huge merged candidate containing the click
+            (50, 80, 45, 55),  # tight stalk candidate containing the click
+            scores=[0.9, 0.5],
+        )
+        out = union_extend(crown, click, predict)
+        assert out is not None
+        assert not out[90, 5], "the huge candidate must not have been chosen"
+
+    def test_an_empty_mask_or_no_candidates_yield_none(self):
+        from marine_autolabel.clickengine.recovery import union_extend
+
+        click = {"x": 0.5, "y": 0.5, "label": 1}
+        empty = np.zeros((self.H, self.W), dtype=bool)
+        predict = self._predict_returning((40, 60, 40, 60))
+        assert union_extend(empty, click, predict) is None
+        none_predict = lambda clicks: (np.zeros((0, self.H, self.W), bool), np.zeros(0))  # noqa: E731
+        assert union_extend(self._mask(10, 50, 40, 60), click, none_predict) is None

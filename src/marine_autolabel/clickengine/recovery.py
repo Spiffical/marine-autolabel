@@ -138,3 +138,68 @@ def run_repair_rounds(
         "rounds_run": rounds_run,
         "hit_round_cap": hit_cap,
     }
+
+
+MIN_EXTENSION_PX = 50
+MAX_BRIDGE_GAP_PX = 40
+
+
+def union_extend(
+    mask: np.ndarray,
+    repair_click: dict[str, Any],
+    predict: Callable[[list[dict[str, Any]]], tuple[np.ndarray, np.ndarray]],
+    *,
+    min_component_px: int = MIN_EXTENSION_PX,
+    max_gap_px: int = MAX_BRIDGE_GAP_PX,
+) -> np.ndarray | None:
+    """Extend a fragment by segmenting the missed continuation SEPARATELY.
+
+    The failure this addresses, observed live: a verifier correctly diagnoses a
+    fragment and supplies a correct positive click on the continuation, but SAM3
+    prompted JOINTLY with all clicks still refuses to bridge a dim gap -- the
+    mask does not grow toward the click at all, and the no-progress rule then
+    (correctly) drops a real organism.
+
+    So instead of re-prompting jointly, segment with the repair click ALONE,
+    take the smallest plausible candidate containing that click, and union it
+    with the existing mask -- provided the new component actually lies near the
+    mask (within `max_gap_px`), so a stray segment elsewhere in the frame cannot
+    be glued on.
+
+    Geometry only proposes here; the caller MUST send the union back through
+    strict verification. Returns the unioned mask, or None when no candidate
+    qualifies.
+    """
+    import cv2  # noqa: PLC0415
+
+    from ..geometry import norm_to_pixel, select_in_band  # noqa: PLC0415
+
+    mask = np.asarray(mask).astype(bool)
+    height, width = mask.shape
+    if not mask.any():
+        return None
+
+    candidates, scores = predict([dict(repair_click)])
+    candidates = np.asarray(candidates).astype(bool)
+    if candidates.size == 0:
+        return None
+
+    px, py = norm_to_pixel(repair_click["x"], repair_click["y"], width, height)
+    containing = [i for i in range(candidates.shape[0]) if candidates[i, py, px]]
+    if not containing:
+        return None
+
+    stack = candidates[containing]
+    index, _reason = select_in_band(stack, np.asarray(scores)[containing])
+    extension = stack[index] & ~mask
+    if int(extension.sum()) < min_component_px:
+        return None
+
+    # The extension must sit against the existing mask, not somewhere else.
+    distance = cv2.distanceTransform(
+        np.logical_not(mask).astype(np.uint8), cv2.DIST_L2, 3
+    )
+    if float(distance[extension].min()) > max_gap_px:
+        return None
+
+    return mask | stack[index]
