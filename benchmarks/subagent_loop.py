@@ -661,11 +661,285 @@ def cmd_fp_gen(root: Path) -> None:
           f"nms_removed={nms_removed} seeded={len(instances)}")
 
 
+MATCH_COLORS_BGR = [
+    (48, 206, 252), (100, 220, 80), (230, 120, 210), (245, 180, 65),
+    (80, 160, 245), (215, 220, 75), (180, 100, 245), (70, 220, 190),
+    (245, 110, 95), (150, 225, 120),
+]
+
+
+def _mask_anchor(mask: np.ndarray) -> tuple[int, int]:
+    ys, xs = np.where(mask)
+    if not len(xs):
+        return 20, 20
+    return int(np.median(xs)), int(np.median(ys))
+
+
+def _draw_badge(image, position, text, color) -> None:
+    x, y = position
+    radius = 17
+    x = min(max(radius + 2, x), image.shape[1] - radius - 2)
+    y = min(max(radius + 2, y), image.shape[0] - radius - 2)
+    cv2.circle(image, (x, y), radius + 2, (0, 0, 0), -1, cv2.LINE_AA)
+    cv2.circle(image, (x, y), radius, color, -1, cv2.LINE_AA)
+    scale = 0.60 if len(text) <= 2 else 0.48
+    size, _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_DUPLEX, scale, 2)
+    cv2.putText(image, text, (x - size[0] // 2, y + size[1] // 2),
+                cv2.FONT_HERSHEY_DUPLEX, scale, (15, 15, 15), 2, cv2.LINE_AA)
+
+
+def _render_object_map(frame, masks, path: Path) -> None:
+    # Contour-only: fills would hide the raw appearance taxonomy depends on.
+    output = frame.copy()
+    for index, mask in enumerate(masks, 1):
+        color = MATCH_COLORS_BGR[(index - 1) % len(MATCH_COLORS_BGR)]
+        contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL,
+                                       cv2.CHAIN_APPROX_SIMPLE)
+        cv2.drawContours(output, contours, -1, color, 3, cv2.LINE_AA)
+        _draw_badge(output, _mask_anchor(mask), str(index), color)
+    header = output.copy()
+    cv2.rectangle(header, (0, 0), (output.shape[1], 42), (0, 0, 0), -1)
+    output = cv2.addWeighted(header, 0.72, output, 0.28, 0)
+    cv2.putText(output, f"NUMBERED SEGMENTATION OBJECTS ({len(masks)})",
+                (14, 29), cv2.FONT_HERSHEY_SIMPLEX, 0.72, (255, 255, 255), 2,
+                cv2.LINE_AA)
+    cv2.imwrite(str(path), output)
+
+
+def _render_identity_sheet(frame, masks, path: Path) -> None:
+    cell_width, cell_height = 400, 300
+    cells = []
+    height, width = frame.shape[:2]
+    for index, mask in enumerate(masks, 1):
+        ys, xs = np.nonzero(mask)
+        if len(xs):
+            left, right = int(xs.min()), int(xs.max()) + 1
+            top, bottom = int(ys.min()), int(ys.max()) + 1
+            padding = max(20, round(0.18 * max(right - left, bottom - top)))
+            left, right = max(0, left - padding), min(width, right + padding)
+            top, bottom = max(0, top - padding), min(height, bottom + padding)
+        else:
+            left, top, right, bottom = 0, 0, width, height
+        crop = frame[top:bottom, left:right].copy()
+        crop_mask = mask[top:bottom, left:right]
+        scale = min((cell_width - 12) / max(1, crop.shape[1]),
+                    (cell_height - 44) / max(1, crop.shape[0]))
+        size = (max(1, round(crop.shape[1] * scale)),
+                max(1, round(crop.shape[0] * scale)))
+        zoom = cv2.resize(crop, size, interpolation=cv2.INTER_CUBIC)
+        zoom_mask = cv2.resize(crop_mask.astype(np.uint8), size,
+                               interpolation=cv2.INTER_NEAREST).astype(bool)
+        color = MATCH_COLORS_BGR[(index - 1) % len(MATCH_COLORS_BGR)]
+        contours, _ = cv2.findContours(zoom_mask.astype(np.uint8),
+                                       cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        cv2.drawContours(zoom, contours, -1, color, 2, cv2.LINE_AA)
+        cell = np.zeros((cell_height, cell_width, 3), dtype=np.uint8)
+        cell[38:38 + zoom.shape[0], 6:6 + zoom.shape[1]] = zoom
+        cv2.putText(cell, f"OBJECT {index} | raw pixels, contour only", (8, 26),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (245, 245, 245), 1, cv2.LINE_AA)
+        cells.append(cell)
+    columns = min(3, max(1, len(cells)))
+    if not cells:
+        sheet = np.zeros((cell_height, cell_width, 3), dtype=np.uint8)
+    else:
+        rows = []
+        for start in range(0, len(cells), columns):
+            row = cells[start:start + columns]
+            row.extend(np.zeros_like(cells[0]) for _ in range(columns - len(row)))
+            rows.append(np.hstack(row))
+        sheet = np.vstack(rows)
+    cv2.imwrite(str(path), sheet)
+
+
+def _read_video_frame(video: Path, frame_index: int):
+    capture = cv2.VideoCapture(str(video))
+    if not capture.isOpened():
+        raise RuntimeError(f"could not open {video}")
+    fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
+    count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    index = min(max(0, frame_index), max(0, count - 1))
+    capture.set(cv2.CAP_PROP_POS_FRAMES, index)
+    ok, frame = capture.read()
+    capture.release()
+    if not ok or fps <= 0:
+        raise RuntimeError(f"could not decode frame {index} from {video}")
+    return frame, fps, index
+
+
+def _render_triptych(video: Path, frame_index: int, seconds: float,
+                     path: Path) -> None:
+    target, fps, _ = _read_video_frame(video, frame_index)
+    offset = max(1, round(fps * seconds))
+    before, _, bidx = _read_video_frame(video, frame_index - offset)
+    after, _, aidx = _read_video_frame(video, frame_index + offset)
+    height, width = target.shape[:2]
+    panels = []
+    for image, label in ((before, f"-{seconds:.1f}s  f{bidx}"),
+                         (target, f"TARGET  f{frame_index}"),
+                         (after, f"+{seconds:.1f}s  f{aidx}")):
+        panel = cv2.resize(image, (width // 2, height // 2),
+                           interpolation=cv2.INTER_AREA)
+        cv2.rectangle(panel, (0, 0), (panel.shape[1], 34), (0, 0, 0), -1)
+        cv2.putText(panel, label, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.62,
+                    (255, 255, 255), 2, cv2.LINE_AA)
+        panels.append(panel)
+    cv2.imwrite(str(path), np.hstack(panels))
+
+
+def _match_annotation_name(annotation: JSON) -> str:
+    if annotation.get("taxon"):
+        return str(annotation["taxon"]).strip()
+    return str(annotation.get("taxon_display_text", "")).split(" | ID:")[0]
+
+
+def build_match_prompt(clip_id: str, annotations: list, object_count: int) -> str:
+    lines = []
+    for index, annotation in enumerate(annotations, 1):
+        count = annotation.get("count")
+        count_text = f", recorded count={count}" if count not in (None, "") else ""
+        lines.append(
+            f"A{index}: annotation_id={annotation['annotation_id']}; "
+            f"taxon={_match_annotation_name(annotation)!r}{count_text}; "
+            f"reviewed={bool(annotation.get('reviewed'))}")
+    candidates = "\n".join(lines) if lines else "(none)"
+    return f"""You are matching existing whole-frame SeaTube taxonomy annotations to
+numbered SAM3 segmentation objects in an underwater video frame.
+
+FRAME: {clip_id}
+NUMBERED OBJECTS: 1 through {object_count}
+
+CANDIDATE ANNOTATIONS (these are the ONLY permitted labels):
+{candidates}
+
+Images are supplied in this order:
+1. raw target frame;
+2. target frame with every segmentation mask outlined and numbered, without
+   color fill;
+3. raw temporal context before / target / after;
+4. one zoomed, contour-only raw-pixel panel for every numbered object.
+
+Rules:
+- Match from visual evidence and temporal context. Never invent a taxon.
+- Use the raw target and zoomed contour-only panels for morphology; palette
+  colors and outlines identify masks but are NOT biological appearance.
+- Compare body plan and structural morphology across scale and viewpoint. Depth,
+  haze, illumination, focus, and camera white balance can make separate examples
+  of one taxon differ substantially in apparent color and contrast. Do not reject
+  a match for color or apparent brightness alone. Conversely, proximity, shared
+  color, or contact alone is not enough to establish a taxonomic match.
+- For branching or colonial life, compare topology, branch thickness and taper,
+  surface texture, and repeated growth pattern in the raw close-ups. Separate
+  colonies at different depths may share one taxon annotation even though they
+  remain separate segmentation objects.
+- Inspect the visible morphology of EACH numbered mask independently. A recorded
+  count is metadata, not visual evidence and NOT an assignment cap. It may be a
+  stale, incomplete, or event-level count. Never label a set merely because its
+  size equals the count, and never withhold an otherwise clear visual match only
+  because assigning it would exceed the count. Report the disagreement in notes.
+- Only group several object IDs under one annotation when every grouped object
+  independently shows morphology consistent with that taxon. Otherwise split
+  the match or leave the ambiguous objects unmatched.
+- A whole-frame annotation can be unmatched if its organism is not segmented or
+  not actually visible in this exact frame. A segmentation can be unmatched.
+- Never force a complete assignment.
+- One annotation may match multiple object IDs when its recorded count or a
+  group-level annotation supports that. It may also match multiple independently
+  convincing objects when the recorded count is lower or absent—for example,
+  three obvious sea stars should all receive the one Asteroidea annotation even
+  if its count says 1. Morphologically matching separate coral colonies may share
+  one coral annotation. Duplicate annotations may describe the
+  same taxon; preserve their IDs instead of guessing which duplicate is unique.
+- Do not label rock, sediment, marine snow, vehicle parts, or other non-biological
+  material merely because an annotation is available.
+- Prefer an explicit unmatched object over a count-based or weak shape guess.
+- Use conservative confidence: 0.90+ only for visually clear matches.
+
+Return brief reasoning followed by EXACTLY one JSON object in <answer> tags:
+<answer>{{
+  "matches": [
+    {{
+      "object_ids": [1],
+      "annotation_ids": [123],
+      "confidence": 0.0,
+      "reason": "short visual reason"
+    }}
+  ],
+  "unmatched_object_ids": [],
+  "unmatched_annotation_ids": [],
+  "notes": ["optional uncertainty note"]
+}}</answer>
+"""
+
+
+def cmd_match_mat(root: Path, clip_id: str, video: str, frame_index: int,
+                  annotations_file: Path, repeats: int,
+                  temporal_seconds: float) -> None:
+    """Render the SeaTube-matching materials and request for one frame."""
+    state = _state(root)
+    frame = _frame(root)
+    h, w = frame.shape[:2]
+    masks = [decode_rle_to_mask(item["rle"], h, w).astype(bool)
+             for item in state["accepted"]]
+    annotations = json.loads(Path(annotations_file).read_text())
+    mdir = root / "match"
+    mdir.mkdir(parents=True, exist_ok=True)
+    _render_object_map(frame, masks, mdir / "object_map.png")
+    _render_identity_sheet(frame, masks, mdir / "identity_sheet.png")
+    _render_triptych(Path(video), frame_index, temporal_seconds,
+                     mdir / "triptych.png")
+    (mdir / "match_prompt.txt").write_text(
+        build_match_prompt(clip_id, annotations, len(masks)))
+    _write(mdir / "annotations.json", annotations)
+    _write(mdir / "match_request.json", {
+        "clip_id": clip_id, "object_count": len(masks), "repeats": repeats,
+        "images": [str(root / "target.png"), str(mdir / "object_map.png"),
+                   str(mdir / "triptych.png"), str(mdir / "identity_sheet.png")],
+        "prompt_file": str(mdir / "match_prompt.txt"),
+        "response_files": [str(mdir / f"match_response_{i + 1}.txt")
+                           for i in range(repeats)],
+    })
+    print(f"match-mat {clip_id}: objects={len(masks)} "
+          f"annotations={len(annotations)} repeats={repeats}")
+
+
+def cmd_match_apply(root: Path) -> None:
+    """Reduce matcher repeats to a consensus with the repo's own reducer."""
+    from marine_autolabel.eval.seatube import build_consensus, normalize_response
+
+    mdir = root / "match"
+    request = _read(mdir / "match_request.json")
+    annotations = _read(mdir / "annotations.json")
+    for item in annotations:
+        item.setdefault("taxon", _match_annotation_name(item))
+    responses = []
+    for path in request["response_files"]:
+        path = Path(path)
+        if not path.exists():
+            continue
+        normalized = normalize_response(
+            _answer_json(path.read_text()),
+            object_count=int(request["object_count"]), annotations=annotations)
+        if normalized is not None:
+            responses.append(normalized)
+    consensus = build_consensus(
+        responses, object_count=int(request["object_count"]),
+        annotations=annotations,
+        configured_repeats=int(request["repeats"]))
+    _write(mdir / "match_consensus.json", consensus)
+    labels = {a["object_id"]: a["label"] for a in consensus["assignments"]}
+    print(f"match-apply: assignments={len(labels)} "
+          f"unmatched_objects={consensus['unmatched_object_ids']} "
+          f"unmatched_annotations={consensus['unmatched_annotation_ids']}")
+    for oid, label in sorted(labels.items()):
+        print(f"  object {oid} -> {label}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("cmd", choices=["views", "groups", "gen", "judge-apply",
                                         "verify-mat", "verify-apply", "accept",
-                                        "zoom-gen", "fp-plan", "fp-gen"])
+                                        "zoom-gen", "fp-plan", "fp-gen",
+                                        "match-mat", "match-apply"])
     parser.add_argument("root", type=Path)
     parser.add_argument("pass_idx", type=int)
     parser.add_argument("--pass-count", type=int, default=0)
@@ -681,6 +955,9 @@ def main() -> int:
     parser.add_argument("--exclude", default="",
                         help="semicolon-separated normalized xyxy regions, "
                              "each 'x0,y0,x1,y1'")
+    parser.add_argument("--annotations", default="")
+    parser.add_argument("--repeats", type=int, default=3)
+    parser.add_argument("--temporal-seconds", type=float, default=1.0)
     a = parser.parse_args()
     if a.cmd == "views":
         cmd_views(a.root, a.pass_idx, a.pass_count, a.video, a.frame_index,
@@ -708,6 +985,11 @@ def main() -> int:
              for region in a.exclude.split(";") if region.strip()])
     elif a.cmd == "fp-gen":
         cmd_fp_gen(a.root)
+    elif a.cmd == "match-mat":
+        cmd_match_mat(a.root, a.frame_id, a.video, a.frame_index,
+                      Path(a.annotations), a.repeats, a.temporal_seconds)
+    elif a.cmd == "match-apply":
+        cmd_match_apply(a.root)
     return 0
 
 
