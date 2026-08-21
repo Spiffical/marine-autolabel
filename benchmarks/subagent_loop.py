@@ -69,6 +69,11 @@ from marine_autolabel.viz.crops import (
     render_mask_crop,
     stack_review_sheet,
 )
+from marine_autolabel.sam3svc.text import (
+    build_planner_prompt,
+    in_exclusion_region,
+    select_prompt_specs,
+)
 from marine_autolabel.viz.views import extract_reference_frames, render_discovery_views
 
 MAX_CLICKS = 5
@@ -474,11 +479,140 @@ def cmd_accept(root: Path, pass_idx: int) -> None:
           f"total={len(state['accepted'])} nms={nms_removed}")
 
 
+def cmd_fp_plan(root: Path, frame_id: str, video: str, frame_index: int,
+                candidates: list[str], visual_note: str,
+                exclude: list[list[float]]) -> None:
+    """First-pass stage 1: extract the frame, write the phrase-planner request."""
+    root.mkdir(parents=True, exist_ok=True)
+    target = root / "target.png"
+    if not target.exists():
+        capture = cv2.VideoCapture(video)
+        if not capture.isOpened():
+            raise RuntimeError(f"could not open video: {video}")
+        try:
+            capture.set(cv2.CAP_PROP_POS_FRAMES, int(frame_index))
+            ok, frame = capture.read()
+        finally:
+            capture.release()
+        if not ok:
+            raise RuntimeError(f"could not read frame {frame_index} from {video}")
+        cv2.imwrite(str(target), frame)
+    fdir = root / "firstpass"
+    fdir.mkdir(parents=True, exist_ok=True)
+    prompt = build_planner_prompt(frame_id, visual_note, candidates)
+    (fdir / "planner_prompt.txt").write_text(prompt)
+    _write(fdir / "config.json", {
+        "frame_id": frame_id, "candidates": candidates,
+        "visual_note": visual_note, "exclusion_regions": exclude,
+    })
+    _write(fdir / "planner_request.json", {
+        "images": [str(target)],
+        "prompt_file": str(fdir / "planner_prompt.txt"),
+        "response_file": str(fdir / "planner_response.txt"),
+    })
+    print(f"fp-plan {frame_id}: candidates={len(candidates)} "
+          f"exclusions={len(exclude)}")
+
+
+def cmd_fp_gen(root: Path) -> None:
+    """First-pass stage 2: SAM3 text masks for the selected phrases; seed state.
+
+    Mirrors production: selected phrases are closed-vocabulary retrieval
+    handles, the processor's built-in confidence threshold (0.5) gates the
+    instances, exclusion regions drop overlay hits, NMS dedups across phrases,
+    and survivors seed the accepted set exactly as `load_firstpass` masks do.
+    """
+    from marine_autolabel.sam3svc.service import as_pil_rgb, build_sam3_service
+    import torch
+
+    fdir = root / "firstpass"
+    cfg = _read(fdir / "config.json")
+    answer = _answer_json((fdir / "planner_response.txt").read_text())
+    specs = select_prompt_specs(cfg["candidates"], answer)
+    frame = _frame(root)
+    h, w = frame.shape[:2]
+    image = as_pil_rgb(frame)
+
+    service = build_sam3_service()
+    processor = service.processor
+    instances = []
+    per_phrase = {}
+    for spec in specs:
+        with torch.inference_mode():
+            state_out = processor.set_image(image)
+            state_out = processor.set_text_prompt(state=state_out, prompt=spec.text)
+        masks, boxes, scores = state_out["masks"], state_out["boxes"], state_out["scores"]
+        masks = (masks.squeeze(1).detach().cpu().numpy()
+                 if torch.is_tensor(masks) else np.asarray(masks).squeeze(1))
+        if masks.ndim == 2:
+            masks = masks[np.newaxis, ...]
+        boxes = (boxes.detach().cpu().numpy()
+                 if torch.is_tensor(boxes) else np.asarray(boxes))
+        boxes = boxes.reshape(-1, 4) if boxes.size else np.zeros((0, 4))
+        scores = (scores.detach().cpu().numpy()
+                  if torch.is_tensor(scores) else np.asarray(scores)).reshape(-1)
+        kept = excluded = 0
+        for i in range(masks.shape[0]):
+            mask = masks[i].astype(bool)
+            if not mask.any():
+                continue
+            box = boxes[i] if i < len(boxes) else None
+            if box is not None and in_exclusion_region(
+                    (box[0] / w, box[1] / h, box[2] / w, box[3] / h),
+                    cfg["exclusion_regions"]):
+                excluded += 1
+                continue
+            ys, xs = np.where(mask)
+            instances.append({
+                "mask": mask,
+                "seed_click": {"x": float(xs.mean() / w), "y": float(ys.mean() / h)},
+                "phrase": spec.text,
+                "prob": float(scores[i]) if i < len(scores) else None,
+            })
+            kept += 1
+        per_phrase[spec.text] = {"kept": kept, "excluded": excluded}
+    instances, nms_removed = mask_level_nms(instances)
+
+    _write(fdir / "frame_outputs_rle.json", {
+        "frame_size_hw": [h, w],
+        "frames": [{
+            "out_binary_masks_rle": [encode_binary_mask_to_rle(it["mask"])
+                                     for it in instances],
+            "out_probs": [it["prob"] for it in instances],
+            "out_boxes_xywh": [],
+        }],
+    })
+    _write(fdir / "summary.json", {
+        "model": "subagent-harness", "error_count": 0,
+        "phrases": [s.text for s in specs], "per_phrase": per_phrase,
+        "n_masks": len(instances), "nms_removed": nms_removed,
+    })
+    state = _state(root)
+    for i, it in enumerate(instances):
+        state["accepted"].append({
+            "rle": encode_binary_mask_to_rle(it["mask"]),
+            "description": f"firstpass:{it['phrase']}",
+            "confidence": it["prob"] if it["prob"] is not None else 0.0,
+            "pass": -1, "gid": f"fp{i}", "source": "firstpass",
+        })
+    _write(root / "state.json", state)
+    out = frame.copy()
+    for i, it in enumerate(instances):
+        c = (40, 220, 40)
+        out[it["mask"]] = (0.45 * np.array(c) + 0.55 * out[it["mask"]]).astype(np.uint8)
+        cnts, _ = cv2.findContours(it["mask"].astype(np.uint8), cv2.RETR_EXTERNAL,
+                                   cv2.CHAIN_APPROX_SIMPLE)
+        cv2.drawContours(out, cnts, -1, c, 2)
+    cv2.imwrite(str(root / "composite_after_firstpass.png"), out)
+    print(f"fp-gen: phrases={[s.text for s in specs]} per_phrase={per_phrase} "
+          f"nms_removed={nms_removed} seeded={len(instances)}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("cmd", choices=["views", "groups", "gen", "judge-apply",
                                         "verify-mat", "verify-apply", "accept",
-                                        "zoom-gen"])
+                                        "zoom-gen", "fp-plan", "fp-gen"])
     parser.add_argument("root", type=Path)
     parser.add_argument("pass_idx", type=int)
     parser.add_argument("--pass-count", type=int, default=0)
@@ -487,6 +621,13 @@ def main() -> int:
     parser.add_argument("--offsets", default="15,30")
     parser.add_argument("--round", type=int, default=0)
     parser.add_argument("--gid", default="")
+    parser.add_argument("--frame-id", default="")
+    parser.add_argument("--candidates", default="",
+                        help="pipe-separated allowed phrases")
+    parser.add_argument("--visual-note", default="")
+    parser.add_argument("--exclude", default="",
+                        help="semicolon-separated normalized xyxy regions, "
+                             "each 'x0,y0,x1,y1'")
     a = parser.parse_args()
     if a.cmd == "views":
         cmd_views(a.root, a.pass_idx, a.pass_count, a.video, a.frame_index,
@@ -505,6 +646,15 @@ def main() -> int:
         cmd_accept(a.root, a.pass_idx)
     elif a.cmd == "zoom-gen":
         cmd_zoom_gen(a.root, a.pass_idx, a.gid)
+    elif a.cmd == "fp-plan":
+        cmd_fp_plan(
+            a.root, a.frame_id, a.video, a.frame_index,
+            [p.strip() for p in a.candidates.split("|") if p.strip()],
+            a.visual_note,
+            [[float(v) for v in region.split(",")]
+             for region in a.exclude.split(";") if region.strip()])
+    elif a.cmd == "fp-gen":
+        cmd_fp_gen(a.root)
     return 0
 
 
