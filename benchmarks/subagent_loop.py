@@ -371,6 +371,50 @@ def cmd_verify_apply(root: Path, pass_idx: int, round_n: int) -> None:
           f"repair_pending={repairable}")
 
 
+def cmd_zoom_gen(root: Path, pass_idx: int, gid: str) -> None:
+    """Zoom-fallback regeneration for one abandoned group, as hybrid would run.
+
+    Mirrors the production hybrid policy: the full-frame path abandoned or was
+    judge-rejected, so re-segment on an upscaled crop around the clicks, where
+    a small or camouflaged target fills the field of view. Proven live on a
+    column SAM3 merged with a rock dome for three full-frame iterations and
+    isolated at the first zoom attempt.
+    """
+    from marine_autolabel.sam3svc.service import build_sam3_service
+    from marine_autolabel.sam3svc.zoom import predict_on_crop
+
+    service = build_sam3_service()
+    frame = _frame(root)
+    h, w = frame.shape[:2]
+    pdir = root / f"pass_{pass_idx}"
+    groups = _read(pdir / "groups.json")
+    group = groups[gid]
+
+    geom = mask_crop_geom(np.zeros((h, w), bool), group["clicks"], w, h, 0.50)
+    up = default_upscale(geom[2], geom[3])
+
+    def run(image, coords, labels):
+        return service.raw_predict(image, point_coords=coords,
+                                   point_labels=labels, multimask=True)
+
+    masks, scores = predict_on_crop(frame, group["clicks"], geom, up, run)
+    masks = clean_candidate_components(masks, group["clicks"])
+    areas = masks.reshape(masks.shape[0], -1).sum(axis=1)
+    valid = areas <= 0.85 * h * w
+    tag = f"g{gid}_zoom"
+    gdir = pdir / "gen"
+    best = int(np.argmax(np.where(valid, scores, -np.inf))) if valid.any() else 0
+    sheet_geom = mask_crop_geom(masks[best], group["clicks"], w, h, 0.30)
+    render_candidate_sheet(frame, masks, group["clicks"], sheet_geom,
+                           gdir / f"{tag}_sheet.png")
+    np.savez_compressed(gdir / f"{tag}_masks.npz", masks=masks, scores=scores,
+                        valid=valid, geom=np.array(sheet_geom))
+    (gdir / f"{tag}_judge_prompt.txt").write_text(
+        build_judge_prompt(group["description"], budget_reached=True))
+    print(f"zoom candidates for g{gid}: areas={areas.tolist()} "
+          f"scores={np.round(scores, 3).tolist()}")
+
+
 def cmd_accept(root: Path, pass_idx: int) -> None:
     state = _state(root)
     frame = _frame(root)
@@ -432,7 +476,8 @@ def cmd_accept(root: Path, pass_idx: int) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("cmd", choices=["views", "groups", "gen", "judge-apply",
-                                        "verify-mat", "verify-apply", "accept"])
+                                        "verify-mat", "verify-apply", "accept",
+                                        "zoom-gen"])
     parser.add_argument("root", type=Path)
     parser.add_argument("pass_idx", type=int)
     parser.add_argument("--pass-count", type=int, default=0)
@@ -440,6 +485,7 @@ def main() -> int:
     parser.add_argument("--frame-index", type=int, default=0)
     parser.add_argument("--offsets", default="15,30")
     parser.add_argument("--round", type=int, default=0)
+    parser.add_argument("--gid", default="")
     a = parser.parse_args()
     if a.cmd == "views":
         cmd_views(a.root, a.pass_idx, a.pass_count, a.video, a.frame_index,
@@ -456,6 +502,8 @@ def main() -> int:
         cmd_verify_apply(a.root, a.pass_idx, a.round)
     elif a.cmd == "accept":
         cmd_accept(a.root, a.pass_idx)
+    elif a.cmd == "zoom-gen":
+        cmd_zoom_gen(a.root, a.pass_idx, a.gid)
     return 0
 
 
